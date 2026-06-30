@@ -10,25 +10,30 @@ const crypto = require('crypto');
 const { Buffer } = require('buffer');
 const { exec, execSync } = require('child_process');
 const { WebSocket, createWebSocketStream } = require('ws');
-const UUID = process.env.UUID || '5efabea4-f6d4-91fd-b8f0-18e004c89c60'; // 运行哪吒v1,在不同的平台需要改UUID,否则会被覆盖
-const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.zxydk1715.dpdns.org:443';       // 哪吒v1填写形式：nz.abc.com:8008   哪吒v0填写形式：nz.abc.com
-const NEZHA_PORT = process.env.NEZHA_PORT || '';           // 哪吒v1没有此变量，v0的agent端口为{443,8443,2096,2087,2083,2053}其中之一时开启tls
-const NEZHA_KEY = process.env.NEZHA_KEY || 'BFbvpxSlBTUugp3gDzezVKkZ22BV0CeL';             // v1的NZ_CLIENT_SECRET或v0的agent端口                
-const DOMAIN = process.env.DOMAIN || 'your-domain.com';    // 填写项目域名或已反代的域名，不带前缀，建议填已反代的域名
-const AUTO_ACCESS = process.env.AUTO_ACCESS || false;      // 是否开启自动访问保活,false为关闭,true为开启,需同时填写DOMAIN变量
-const WSPATH = process.env.WSPATH || UUID.slice(0, 8);     // 节点路径，默认获取uuid前8位
-const SUB_PATH = process.env.SUB_PATH || 'sub';            // 获取节点的订阅路径
-const NAME = process.env.NAME || '';                       // 节点名称
-const PORT = process.env.PORT || 3000;                     // http和ws服务端口
+
+const UUID = process.env.UUID || '5efabea4-f6d4-91fd-b8f0-18e004c89c60';
+const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.zxydk1715.dpdns.org:443';
+const NEZHA_PORT = process.env.NEZHA_PORT || '';
+const NEZHA_KEY = process.env.NEZHA_KEY || 'BFbvpxSlBTUugp3gDzezVKkZ22BV0CeL';
+const DOMAIN = process.env.DOMAIN || 'shturl.cc/OqgBu';
+const AUTO_ACCESS = process.env.AUTO_ACCESS || false;
+const WSPATH = process.env.WSPATH || UUID.slice(0, 8);
+const SUB_PATH = process.env.SUB_PATH || 'sub';
+const NAME = process.env.NAME || '';
+const PORT = process.env.PORT || 3000;
+
+// 关键修改：全部文件放到 /tmp 临时目录，只读环境/tmp一般可写
+const TMP_DIR = '/tmp';
+const NZ_BIN_PATH = path.join(TMP_DIR, 'npm');
+const NZ_CONFIG_PATH = path.join(TMP_DIR, 'config.yaml');
 
 let uuid = UUID.replace(/-/g, ""), CurrentDomain = DOMAIN, Tls = 'tls', CurrentPort = 443, ISP = '';
 const DNS_SERVERS = ['8.8.4.4', '1.1.1.1'];
 const BLOCKED_DOMAINS = [
   'speedtest.net', 'fast.com', 'speedtest.cn', 'speed.cloudflare.com', 'speedof.me',
-   'testmy.net', 'bandwidth.place', 'speed.io', 'librespeed.org', 'speedcheck.org'
+  'testmy.net', 'bandwidth.place', 'speed.io', 'librespeed.org', 'speedcheck.org'
 ];
 
-// block speedtest domains
 function isBlockedDomain(host) {
   if (!host) return false;
   const hostLower = host.toLowerCase();
@@ -54,21 +59,20 @@ async function getisp() {
 }
 
 async function getip() {
-  if (!DOMAIN || DOMAIN === 'your-domain.com') {
+  if (!DOMAIN || DOMAIN === 'shturl.cc/OqgBu') {
       try {
           const res = await axios.get('https://api-ipv4.ip.sb/ip', { timeout: 5000 });
           const ip = res.data.trim();
           CurrentDomain = ip, Tls = 'none', CurrentPort = PORT;
       } catch (e) {
           console.error('Failed to get IP', e.message);
-          CurrentDomain = 'cahnge-your-domain.com', Tls = 'tls', CurrentPort = 443;
+          CurrentDomain = 'change-shturl.cc/OqgBu', Tls = 'tls', CurrentPort = 443;
       }
   } else {
       CurrentDomain = DOMAIN, Tls = 'tls', CurrentPort = 443;
   }
 }
 
-// http route
 const httpServer = http.createServer(async (req, res) => {
   if (req.url === '/') {
     const filePath = path.join(__dirname, 'index.html');
@@ -102,7 +106,6 @@ const httpServer = http.createServer(async (req, res) => {
   }
 });
 
-// Custom DNS
 function resolveHost(host) {
   return new Promise((resolve, reject) => {
     if (/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(host)) {
@@ -115,8 +118,6 @@ function resolveHost(host) {
         reject(new Error(`Failed to resolve ${host} with all DNS servers`));
         return;
       }
-      const dnsServer = DNS_SERVERS[attempts];
-      attempts++;
       const dnsQuery = `https://dns.google/resolve?name=${encodeURIComponent(host)}&type=A`;
       axios.get(dnsQuery, {
         timeout: 5000,
@@ -133,18 +134,18 @@ function resolveHost(host) {
               return;
             }
           }
+          attempts++;
           tryNextDNS();
         })
-        .catch(error => {
+        .catch(() => {
+          attempts++;
           tryNextDNS();
         });
     }
-
     tryNextDNS();
   });
 }
 
-// VLE-SS处理
 function handleVlsConnection(ws, msg) {
   const [VERSION] = msg;
   const id = msg.slice(1, 17);
@@ -170,7 +171,7 @@ function handleVlsConnection(ws, msg) {
         duplex.on('error', () => { }).pipe(this).on('error', () => { }).pipe(duplex);
       }).on('error', () => { });
     })
-    .catch(error => {
+    .catch(() => {
       net.connect({ host, port }, function () {
         this.write(msg.slice(i));
         duplex.on('error', () => { }).pipe(this).on('error', () => { }).pipe(duplex);
@@ -180,28 +181,16 @@ function handleVlsConnection(ws, msg) {
   return true;
 }
 
-// Tro-jan处理
 function handleTrojConnection(ws, msg) {
   try {
     if (msg.length < 58) return false;
     const receivedPasswordHash = msg.slice(0, 56).toString();
-    const possiblePasswords = [UUID];
-
-    let matchedPassword = null;
-    for (const pwd of possiblePasswords) {
-      const hash = crypto.createHash('sha224').update(pwd).digest('hex');
-      if (hash === receivedPasswordHash) {
-        matchedPassword = pwd;
-        break;
-      }
-    }
-
-    if (!matchedPassword) return false;
+    const hash = crypto.createHash('sha224').update(UUID).digest('hex');
+    if (hash !== receivedPasswordHash) return false;
     let offset = 56;
     if (msg[offset] === 0x0d && msg[offset + 1] === 0x0a) {
       offset += 2;
     }
-
     const cmd = msg[offset];
     if (cmd !== 0x01) return false;
     offset += 1;
@@ -246,7 +235,7 @@ function handleTrojConnection(ws, msg) {
           duplex.on('error', () => { }).pipe(this).on('error', () => { }).pipe(duplex);
         }).on('error', () => { });
       })
-      .catch(error => {
+      .catch(() => {
         net.connect({ host, port }, function () {
           if (offset < msg.length) {
             this.write(msg.slice(offset));
@@ -256,12 +245,11 @@ function handleTrojConnection(ws, msg) {
       });
 
     return true;
-  } catch (error) {
+  } catch {
     return false;
   }
 }
 
-// Ss处理
 function handleSsConnection(ws, msg) {
   try {
     let offset = 0;
@@ -303,7 +291,7 @@ function handleSsConnection(ws, msg) {
           duplex.on('error', () => { }).pipe(this).on('error', () => { }).pipe(duplex);
         }).on('error', () => { });
       })
-      .catch(error => {
+      .catch(() => {
         net.connect({ host, port }, function () {
           if (offset < msg.length) {
             this.write(msg.slice(offset));
@@ -313,16 +301,14 @@ function handleSsConnection(ws, msg) {
       });
 
     return true;
-  } catch (error) {
+  } catch {
     return false;
   }
 }
 
-// Ws handler
 const wss = new WebSocket.Server({ server: httpServer });
 wss.on('connection', (ws, req) => {
   const url = req.url || '';
-
   const expectedPath = `/${WSPATH}`;
   if (!url.startsWith(expectedPath)) {
     ws.close();
@@ -330,30 +316,20 @@ wss.on('connection', (ws, req) => {
   }
 
   ws.once('message', msg => {
-    // VLE-SS (version byte 0 + 16 bytes UUID)
     if (msg.length > 17 && msg[0] === 0) {
       const id = msg.slice(1, 17);
       const isVless = id.every((v, i) => v == parseInt(uuid.substr(i * 2, 2), 16));
       if (isVless) {
-        if (!handleVlsConnection(ws, msg)) {
-          ws.close();
-        }
+        if (!handleVlsConnection(ws, msg)) ws.close();
         return;
       }
     }
-    // tro-jan (56 bytes SHA224 hash)
     if (msg.length >= 58) {
-      if (handleTrojConnection(ws, msg)) {
-        return;
-      }
+      if (handleTrojConnection(ws, msg)) return;
     }
-    // SS (ATYP开头: 0x01, 0x03, 0x04)
     if (msg.length > 0 && (msg[0] === 0x01 || msg[0] === 0x03 || msg[0] === 0x04)) {
-      if (handleSsConnection(ws, msg)) {
-        return;
-      }
+      if (handleSsConnection(ws, msg)) return;
     }
-
     ws.close();
   }).on('error', () => { });
 });
@@ -361,41 +337,23 @@ wss.on('connection', (ws, req) => {
 const getDownloadUrl = () => {
   const arch = os.arch();
   if (arch === 'arm' || arch === 'arm64' || arch === 'aarch64') {
-    if (!NEZHA_PORT) {
-      return 'https://arm64.ssss.nyc.mn/v1';
-    } else {
-      return 'https://arm64.ssss.nyc.mn/agent';
-    }
+    return NEZHA_PORT ? 'https://arm64.ssss.nyc.mn/agent' : 'https://arm64.ssss.nyc.mn/v1';
   } else {
-    if (!NEZHA_PORT) {
-      return 'https://amd64.ssss.nyc.mn/v1';
-    } else {
-      return 'https://amd64.ssss.nyc.mn/agent';
-    }
+    return NEZHA_PORT ? 'https://amd64.ssss.nyc.mn/agent' : 'https://amd64.ssss.nyc.mn/v1';
   }
 };
 
 const downloadFile = async () => {
   if (!NEZHA_SERVER && !NEZHA_KEY) return;
-
   try {
     const url = getDownloadUrl();
-    const response = await axios({
-      method: 'get',
-      url: url,
-      responseType: 'stream'
-    });
-
-    const writer = fs.createWriteStream('npm');
+    const response = await axios({ method: 'get', url, responseType: 'stream' });
+    const writer = fs.createWriteStream(NZ_BIN_PATH);
     response.data.pipe(writer);
-
     return new Promise((resolve, reject) => {
       writer.on('finish', () => {
-        console.log('npm download successfully');
-        exec('chmod +x npm', (err) => {
-          if (err) reject(err);
-          resolve();
-        });
+        console.log('npm 二进制下载完成，路径：', NZ_BIN_PATH);
+        exec(`chmod +x ${NZ_BIN_PATH}`, err => err ? reject(err) : resolve());
       });
       writer.on('error', reject);
     });
@@ -405,27 +363,25 @@ const downloadFile = async () => {
 };
 
 const runnz = async () => {
+  if (!NEZHA_SERVER || !NEZHA_KEY) return;
   try {
-    const status = execSync('ps aux | grep -v "grep" | grep "./[n]pm"', { encoding: 'utf-8' });
-    if (status.trim() !== '') {
-      console.log('npm is already running, skip running...');
+    const status = execSync(`ps aux | grep -v "grep" | grep ${path.basename(NZ_BIN_PATH)}`, { encoding: 'utf-8' });
+    if (status.trim()) {
+      console.log('哪吒agent已在运行，跳过下载启动');
       return;
     }
-  } catch (e) {
-    // 进程不存在时继续运行nezha
-  }
+  } catch {}
 
   await downloadFile();
   let command = '';
-  let tlsPorts = ['443', '8443', '2096', '2087', '2083', '2053'];
-  if (NEZHA_SERVER && NEZHA_PORT && NEZHA_KEY) {
+  const tlsPorts = ['443', '8443', '2096', '2087', '2083', '2053'];
+  if (NEZHA_PORT) {
     const NEZHA_TLS = tlsPorts.includes(NEZHA_PORT) ? '--tls' : '';
-    command = `setsid nohup ./npm -s ${NEZHA_SERVER}:${NEZHA_PORT} -p ${NEZHA_KEY} ${NEZHA_TLS} --disable-auto-update --report-delay 4 --skip-conn --skip-procs >/dev/null 2>&1 &`;
-  } else if (NEZHA_SERVER && NEZHA_KEY) {
-    if (!NEZHA_PORT) {
-      const port = NEZHA_SERVER.includes(':') ? NEZHA_SERVER.split(':').pop() : '';
-      const NZ_TLS = tlsPorts.includes(port) ? 'true' : 'false';
-      const configYaml = `client_secret: ${NEZHA_KEY}
+    command = `setsid nohup ${NZ_BIN_PATH} -s ${NEZHA_SERVER}:${NEZHA_PORT} -p ${NEZHA_KEY} ${NEZHA_TLS} --disable-auto-update --report-delay 4 --skip-conn --skip-procs >/dev/null 2>&1 &`;
+  } else {
+    const port = NEZHA_SERVER.includes(':') ? NEZHA_SERVER.split(':').pop() : '';
+    const NZ_TLS = tlsPorts.includes(port) ? 'true' : 'false';
+    const configYaml = `client_secret: ${NEZHA_KEY}
 debug: false
 disable_auto_update: true
 disable_command_execute: false
@@ -444,55 +400,34 @@ tls: ${NZ_TLS}
 use_gitee_to_upgrade: false
 use_ipv6_country_code: false
 uuid: ${UUID}`;
-
-      fs.writeFileSync('config.yaml', configYaml);
-    }
-    command = `setsid nohup ./npm -c config.yaml >/dev/null 2>&1 &`;
-  } else {
-    // console.log('NEZHA variable is empty, skip running');
-    return;
+    fs.writeFileSync(NZ_CONFIG_PATH, configYaml);
+    command = `setsid nohup ${NZ_BIN_PATH} -c ${NZ_CONFIG_PATH} >/dev/null 2>&1 &`;
   }
 
-  try {
-    exec(command, { shell: '/bin/bash' }, (err) => {
-      if (err) console.error('npm running error:', err);
-      else console.log('npm is running');
-    });
-  } catch (error) {
-    console.error(`error: ${error}`);
-  }
+  exec(command, { shell: '/bin/bash' }, err => {
+    if (err) console.error('哪吒启动失败：', err);
+    else console.log('哪吒agent已后台启动');
+  });
 };
 
 async function addAccessTask() {
-  if (!AUTO_ACCESS) return;
-
-  if (!DOMAIN) {
-    return;
-  }
+  if (!AUTO_ACCESS || !DOMAIN) return;
   const fullURL = `https://${DOMAIN}/${SUB_PATH}`;
   try {
-    const res = await axios.post("https://oooo.serv00.net/add-url", {
-      url: fullURL
-    }, {
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
-    console.log('Automatic Access Task added successfully');
-  } catch (error) {
-    // console.error('Error adding Task:', error.message);
-  }
+    await axios.post("https://oooo.serv00.net/add-url", { url: fullURL }, { headers: { 'Content-Type': 'application/json' } });
+    console.log('自动保活任务添加成功');
+  } catch {}
 }
 
+// 清理临时文件
 const delFiles = () => {
-  ['npm', 'config.yaml'].forEach(file => fs.unlink(file, () => { }));
+  [NZ_BIN_PATH, NZ_CONFIG_PATH].forEach(file => fs.unlink(file, () => {}));
 };
 
-httpServer.listen(PORT, () => {
-  runnz();
-  setTimeout(() => {
-    delFiles();
-  }, 180000);
+httpServer.listen(PORT, async () => {
+  console.log(`代理服务运行端口：${PORT}`);
+  await runnz();
+  // 3分钟后自动删除/tmp下的临时文件
+  setTimeout(delFiles, 180000);
   addAccessTask();
-  console.log(`Server is running on port ${PORT}`);
 });
