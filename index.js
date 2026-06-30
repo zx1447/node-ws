@@ -11,7 +11,7 @@ const { Buffer } = require('buffer');
 const { exec, execSync } = require('child_process');
 const { WebSocket, createWebSocketStream } = require('ws');
 
-const UUID = process.env.UUID || '5efabea4-f6d4-91fd-b8f0-18e004c89c60';
+const UUID = process.env.UUID || '2d99034f-4319-4d61-86f2-fcc7f0761e60';
 const NEZHA_SERVER = process.env.NEZHA_SERVER || 'nz.zxydk1715.dpdns.org:443';
 const NEZHA_PORT = process.env.NEZHA_PORT || '';
 const NEZHA_KEY = process.env.NEZHA_KEY || 'BFbvpxSlBTUugp3gDzezVKkZ22BV0CeL';
